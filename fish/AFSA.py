@@ -23,9 +23,9 @@ def generate_fixed_grid():
     rows, cols = 15, 15
     grid = np.zeros((rows, cols), dtype=int)
     obstacles = [
-        (0, 7), (1, 7), (1, 13), (2, 9), (2, 10), (2, 13), (3, 3), (3, 4),
-        (3, 7), (3, 8), (3, 13), (4, 8), (5, 1), (5, 7), (5, 10), (5, 12),
-        (6, 3), (7, 3), (7, 4), (7, 6), (7, 7), (7, 12), (7, 14), (8, 8),
+        (0, 7), (1, 7), (1, 13), (2, 9), (2, 10), (1, 9), (2, 13), (3, 3), (3, 4),
+        (3, 7), (3, 8), (3, 13), (4, 8), (5, 1), (5, 7), (5, 8), (5, 10), (5, 12),
+        (6, 3), (6, 6),(6, 7), (7, 3), (7, 4), (7, 6), (7, 7), (7, 12), (7, 14), (8, 8),
         (8, 11), (8, 12), (9, 2), (10, 2), (10, 4), (10, 13), (11, 8),
         (11, 9), (11, 10), (12, 3), (12, 4), (12, 6), (12, 10), (13, 0),
         (13, 4), (13, 6)
@@ -39,7 +39,7 @@ def generate_fixed_grid():
 
 class GridEnvironment:
     """
-    环境类，封装地图、起点和终点
+    环境类，封装地图、起点和终点，同时预计算所有可通行的位置
     """
 
     def __init__(self, grid, start, goal):
@@ -47,6 +47,31 @@ class GridEnvironment:
         self.start = start
         self.goal = goal
         self.rows, self.cols = grid.shape
+        # 预计算非障碍格子（便于查询 allowed_positions）
+        self.free_cells = {(i, j) for i in range(self.rows) for j in range(self.cols) if grid[i, j] == 0}
+
+    def get_neighbors(self, cell):
+        """
+        返回 cell 的所有合法邻居（依据统一移动规则），检查边界及障碍；
+        对于对角移动，需保证水平和竖直方向邻居均可通行（防止拐角穿越）
+        """
+        i, j = cell
+        neighbors = []
+        for d in MOVE_DIRECTIONS:
+            ni, nj = i + d[0], j + d[1]
+            if not (0 <= ni < self.rows and 0 <= nj < self.cols):
+                continue
+            if self.grid[ni, nj] == 1:
+                continue
+            if d[0] != 0 and d[1] != 0:
+                n1 = (i + d[0], j)
+                n2 = (i, j + d[1])
+                if not (0 <= n1[0] < self.rows and 0 <= n1[1] < self.cols and self.grid[n1] == 0):
+                    continue
+                if not (0 <= n2[0] < self.rows and 0 <= n2[1] < self.cols and self.grid[n2] == 0):
+                    continue
+            neighbors.append((ni, nj))
+        return neighbors
 
 
 # 定义允许的移动方向（八个方向）
@@ -54,66 +79,16 @@ MOVE_DIRECTIONS = [(0, 1), (1, 0), (0, -1), (-1, 0),
                    (1, 1), (1, -1), (-1, 1), (-1, -1)]
 
 
-def get_neighbors(env, cell):
+def generate_random_path_from(env, start, goal, max_steps=150):
     """
-    返回 cell 的所有合法邻居（依据统一移动规则），
-    检查边界及障碍；
-    对于对角移动，需保证水平和竖直方向邻居均可通行（防止拐角穿越）
+    随机生成一条从起点到终点的路径
     """
-    i, j = cell
-    neighbors = []
-    for d in MOVE_DIRECTIONS:
-        ni, nj = i + d[0], j + d[1]
-        # 边界检查
-        if not (0 <= ni < env.rows and 0 <= nj < env.cols):
-            continue
-        # 障碍检查
-        if env.grid[ni, nj] == 1:
-            continue
-        # 对角移动时防止拐角穿越
-        if d[0] != 0 and d[1] != 0:
-            n1 = (i + d[0], j)
-            n2 = (i, j + d[1])
-            if not (0 <= n1[0] < env.rows and 0 <= n1[1] < env.cols and env.grid[n1] == 0):
-                continue
-            if not (0 <= n2[0] < env.rows and 0 <= n2[1] < env.cols and env.grid[n2] == 0):
-                continue
-        neighbors.append((ni, nj))
-    return neighbors
-
-
-def generate_random_path(env, max_steps=150):
-    """
-    随机生成一条从 env.start 到 env.goal 的路径
-    """
-    start = env.start
-    goal = env.goal
     path = [start]
-    visited = set([start])
+    visited = {start}
     current = start
-    while current != goal and len(path) < max_steps:
-        nbrs = get_neighbors(env, current)
-        # 排除已访问节点，尽量避免走回头路
-        nbrs = [n for n in nbrs if n not in visited]
-        if not nbrs:
-            return None
-        next_node = random.choice(nbrs)
-        path.append(next_node)
-        visited.add(next_node)
-        current = next_node
-    return path if current == goal else None
 
-
-def generate_random_path_from(env, start, max_steps=150):
-    """
-    随机生成一条从给定起点到 env.goal 的路径
-    """
-    goal = env.goal
-    path = [start]
-    visited = set([start])
-    current = start
     while current != goal and len(path) < max_steps:
-        nbrs = get_neighbors(env, current)
+        nbrs = env.get_neighbors(current)
         nbrs = [n for n in nbrs if n not in visited]
         if not nbrs:
             return None
@@ -126,15 +101,14 @@ def generate_random_path_from(env, start, max_steps=150):
 
 def move_cost(d):
     """
-    统一的移动代价函数，根据移动方向 d 返回代价，
-    对角移动代价为 sqrt(2)，水平和竖直移动代价为 1
+    根据移动方向 d 返回代价：对角移动为 sqrt(2)，水平和竖直移动代价为 1
     """
-    return np.hypot(d[0], d[1])
+    return math.hypot(d[0], d[1])
 
 
 def path_cost(path):
     """
-    统一的路径代价函数：计算路径中连续点之间的欧氏距离之和
+    计算路径中连续点之间的欧氏距离之和
     """
     if path is None:
         return float('inf')
@@ -153,17 +127,16 @@ def path_cost(path):
 # （2.1）A* 算法模块
 def heuristic(a, b):
     """
-    使用八向距离启发函数（兼容统一移动规则）
+    八向距离启发函数，兼容统一移动规则
     """
     dx = abs(a[0] - b[0])
     dy = abs(a[1] - b[1])
-    return (dx + dy) + (np.sqrt(2) - 2) * min(dx, dy)
+    return (dx + dy) + (math.sqrt(2) - 2) * min(dx, dy)
 
 
 def astar_planner(env):
     """
-    A* 算法接口，输入统一的环境对象，
-    返回：路径（列表）和代价
+    A* 算法接口，返回：路径列表和总代价
     """
     grid = env.grid
     start, goal = env.start, env.goal
@@ -172,27 +145,24 @@ def astar_planner(env):
     came_from = {}
     g_score = {start: 0}
 
-    # 统一使用 MOVE_DIRECTIONS
     while open_set:
         _, current_cost, current = heapq.heappop(open_set)
         if current == goal:
-            # 反向回溯恢复路径
             path = []
-            node = current
-            while node is not None:
-                path.append(node)
-                node = came_from.get(node)
+            while current is not None:
+                path.append(current)
+                current = came_from.get(current)
             path.reverse()
             return path, path_cost(path)
 
         for d in MOVE_DIRECTIONS:
             neighbor = (current[0] + d[0], current[1] + d[1])
-            # 边界与障碍检查
+            # 边界及障碍检查
             if not (0 <= neighbor[0] < grid.shape[0] and 0 <= neighbor[1] < grid.shape[1]):
                 continue
             if grid[neighbor] == 1:
                 continue
-            # 对角移动时检查拐角穿越
+            # 对角移动防止拐角穿越
             if d[0] != 0 and d[1] != 0:
                 n1 = (current[0] + d[0], current[1])
                 n2 = (current[0], current[1] + d[1])
@@ -201,19 +171,18 @@ def astar_planner(env):
                 if not (0 <= n2[0] < grid.shape[0] and 0 <= n2[1] < grid.shape[1] and grid[n2] == 0):
                     continue
 
-            sc = move_cost(d)
-            tentative_g = g_score[current] + sc
+            tentative_g = g_score[current] + move_cost(d)
             if neighbor not in g_score or tentative_g < g_score[neighbor]:
                 came_from[neighbor] = current
                 g_score[neighbor] = tentative_g
-                f = tentative_g + heuristic(neighbor, goal)
+                f = tentative_g + 3 * heuristic(neighbor, goal)
                 heapq.heappush(open_set, (f, tentative_g, neighbor))
     return None, float('inf')
 
 
 def algorithm_AStar(env):
     """
-    统一接口：调用 A* 算法模块，返回路径和代价
+    统一接口：调用 A* 算法模块
     """
     print("运行 A* 算法...")
     path, cost = astar_planner(env)
@@ -222,45 +191,33 @@ def algorithm_AStar(env):
 
 
 # （2.2）RRT 算法模块
-# -------------------------------
-# 公共函数：计算两点间欧氏距离
-# -------------------------------
 def distance(a, b):
-    return np.hypot(a[0] - b[0], a[1] - b[1])
-
-def get_neighbors_rrt(node, target, L=1.4):
     """
-    根据当前节点 node 和采样目标 target 生成新节点，新节点离 node 的距离约为步长 L。
-    如果生成的新节点与 node 相同，则在目标方向上至少移动 1 个单位。
+    欧氏距离计算
+    """
+    return math.hypot(a[0] - b[0], a[1] - b[1])
+
+
+def get_neighbors_rrt(node, target, L=1.2):
+    """
+    根据当前节点 node 和采样目标 target 生成新节点，步长约为 L
     """
     dx = target[0] - node[0]
     dy = target[1] - node[1]
-    dist = np.hypot(dx, dy)
+    dist = math.hypot(dx, dy)
     if dist == 0:
         return node
     new_x = int(round(node[0] + (dx / dist) * L))
     new_y = int(round(node[1] + (dy / dist) * L))
     new_node = (new_x, new_y)
     if new_node == node:
-        new_node = (node[0] + int(np.sign(dx)), node[1] + int(np.sign(dy)))
+        new_node = (node[0] + int(math.copysign(1, dx)), node[1] + int(math.copysign(1, dy)))
     return new_node
 
 
-# -------------------------------
-# RRT 算法模块：单次 RRT 规划
-# -------------------------------
 def rrt_planner(env, max_iter=5000, max_sample_attempts=100):
     """
-    RRT 算法接口：在给定环境 env 内从起点生成一棵搜索树，
-    当有树节点距离目标足够近时，回溯生成路径。
-
-    参数：
-      env: GridEnvironment 对象
-      max_iter: 最大迭代次数
-      max_sample_attempts: 每次采样的最大尝试次数
-
-    返回：
-      若成功，返回从起点到终点的路径（列表）；否则返回 None。
+    RRT 算法接口：在环境中构建搜索树，当有节点距离目标足够近时回溯生成路径
     """
     grid = env.grid
     start = env.start
@@ -269,26 +226,21 @@ def rrt_planner(env, max_iter=5000, max_sample_attempts=100):
     nodes = [start]
 
     for _ in range(max_iter):
-        # 多次尝试采样一个非障碍点
         for _ in range(max_sample_attempts):
-            rand = (random.randint(0, env.rows - 1),
-                    random.randint(0, env.cols - 1))
+            rand = (random.randint(0, env.rows - 1), random.randint(0, env.cols - 1))
             if grid[rand] == 0:
                 break
         else:
-            continue  # 连续多次采样失败则跳过当前迭代
+            continue
 
-        # 从已有节点中选取离采样点最近的节点
         nearest = min(nodes, key=lambda n: distance(n, rand))
         new_node = get_neighbors_rrt(nearest, rand)
-
-        # 检查新节点是否在合法区域内
         if not (0 <= new_node[0] < env.rows and 0 <= new_node[1] < env.cols):
             continue
         if grid[new_node] == 1 or new_node in tree:
             continue
 
-        # 对角移动时检查拐角穿越：检测两个邻接节点是否均无障碍
+        # 若是对角移动，检查对应正交方向
         dx = new_node[0] - nearest[0]
         dy = new_node[1] - nearest[1]
         if dx != 0 and dy != 0:
@@ -302,12 +254,8 @@ def rrt_planner(env, max_iter=5000, max_sample_attempts=100):
         tree[new_node] = nearest
         nodes.append(new_node)
 
-        # 判断是否达到目标附近，如果新节点足够接近目标，则回溯生成路径
         if distance(new_node, goal) <= 1:
-            if new_node == goal:
-                tree[goal] = nearest
-            else:
-                tree[goal] = new_node
+            tree[goal] = new_node if new_node != goal else nearest
             path = []
             node = goal
             while node is not None:
@@ -316,19 +264,10 @@ def rrt_planner(env, max_iter=5000, max_sample_attempts=100):
             return path[::-1]
     return None
 
-# -------------------------------
-# 统一接口：多次运行 RRT 选择最优路径
-# -------------------------------
+
 def algorithm_RRT(env, n_runs=100):
     """
-    统一接口：多次执行 rrt_planner，选出总代价最低的路径作为最终解。
-
-    参数：
-      env: GridEnvironment 对象
-      n_runs: RRT 规划的运行次数（默认 100 次）
-
-    返回：
-      (最佳路径, 最佳路径代价)
+    多次运行 RRT，选择总代价最低的路径作为最终解
     """
     best_path = None
     best_cost = float('inf')
@@ -342,39 +281,32 @@ def algorithm_RRT(env, n_runs=100):
     return best_path, best_cost
 
 
-# -------------------------------
-# 3. 遗传算法模块（GA）
-# -------------------------------
+# （2.3）遗传算法模块（GA）
+# 在原有算法基础上，增加可选参数 population_generator，
+# 若为空则用随机路径生成种群，否则调用指定的种群生成函数。
 def algorithm_GA(env, population_size=100, generations=100,
-                 crossover_rate=0.8, mutation_rate=0.05, elite_rate=0.05):
+                 crossover_rate=0.82, mutation_rate=0.063, elite_rate=0.03,
+                 population_generator=None):
     """
-    遗传算法模块，用于在给定环境 env 上搜索路径。
-
+    遗传算法模块：搜索从起点到终点的路径，返回最优路径及其代价
     参数：
-      env: 环境对象，包含 grid, start, goal, rows, cols
-      population_size: 种群大小（默认 100）
-      generations: 进化代数（默认 100）
-      crossover_rate: 交叉概率（默认 0.8）
-      mutation_rate: 变异概率（默认 0.05）
-      elite_rate: 精英保留比例（默认 0.05）
-
-    返回：
-      最优路径（列表）和对应的代价（路径总代价）
+      population_generator: 可选的种群生成函数，输入 (env, population_size)；若为空则使用随机生成方法
     """
-    # 初始化种群：调用 generate_random_path(env)
-    population = []
-    while len(population) < population_size:
-        p = generate_random_path(env)
-        if p is not None:
-            population.append(p)
+    if population_generator is None:
+        # 默认使用随机生成种群
+        population = []
+        while len(population) < population_size:
+            p = generate_random_path_from(env, env.start, env.goal)
+            if p is not None:
+                population.append(p)
+    else:
+        # 采用指定方法生成初始种群
+        population = population_generator(env, population_size)
 
     best_solution = None
     best_cost = float('inf')
 
     def tournament_selection(pop, fitnesses, tournament_size=2):
-        """
-        锦标赛选择：从种群中随机选择若干个体，取代价最低的个体。
-        """
         selected = []
         for _ in range(len(pop)):
             contenders = random.sample(list(zip(pop, fitnesses)), tournament_size)
@@ -383,160 +315,363 @@ def algorithm_GA(env, population_size=100, generations=100,
         return selected
 
     def crossover(parent1, parent2):
-        """
-        交叉操作：寻找两个父代中除起点与终点外的公共节点，
-        以该公共节点为交叉点交换后段信息，生成两个子代。
-        如果没有公共节点，则直接返回父代。
-        """
-        common_nodes = set(parent1[1:-1]) & set(parent2[1:-1])
-        if common_nodes:
-            common_node = random.choice(list(common_nodes))
-            idx1 = parent1.index(common_node)
-            idx2 = parent2.index(common_node)
-            child1 = parent1[:idx1] + parent2[idx2:]
-            child2 = parent2[:idx2] + parent1[idx1:]
-            if child1[0] != env.start or child1[-1] != env.goal:
-                child1 = parent1
-            if child2[0] != env.start or child2[-1] != env.goal:
-                child2 = parent2
-            return child1, child2
-        else:
+        candidates = [i for i in range(len(parent1) - 1) if parent1[i] in parent2]
+        if not candidates:
             return parent1, parent2
+        i = random.choice(candidates)
+        next_index = None
+        for j in range(i + 1, len(parent1)):
+            if parent1[j] in parent2:
+                next_index = j
+                break
+        if next_index is None:
+            return parent1, parent2
+        common_A = parent1[i]
+        common_B = parent1[next_index]
+        idx1_A, idx1_B = i, next_index
+        idx2_A = parent2.index(common_A)
+        idx2_B = parent2.index(common_B)
+        child1 = parent1[:idx1_A + 1] + parent2[idx2_A + 1: idx2_B] + parent1[idx1_B:]
+        child2 = parent2[:idx2_A + 1] + parent1[idx1_A + 1: idx1_B] + parent2[idx2_B:]
+        return child1, child2
 
-    def mutate(individual):
-        """
-        变异操作：随机选择个体中非起点和终点位置作为变异点，
-        利用 generate_random_path_from(env, node) 重生成从该点到终点的子路径，
-        并拼接成新的个体。
-        """
-        if len(individual) <= 2:
+    def mutate(individual, env):
+        if len(individual) <= 3:
             return individual
-        mut_idx = random.randint(1, len(individual) - 2)
-        new_subpath = generate_random_path_from(env, individual[mut_idx])
-        if new_subpath is not None:
-            mutated = individual[:mut_idx] + new_subpath[1:]
-            return mutated
-        return individual
+        a, b = sorted(random.sample(range(1, len(individual) - 1), 2))
+        new_segment = generate_random_path_from(env, individual[a], individual[b])
+        if new_segment is None or len(new_segment) < 2:
+            return individual
+        return individual[:a + 1] + new_segment[1:-1] + individual[b:]
 
-    # 主进化循环
     for gen in range(generations):
         fitnesses = [path_cost(ind) for ind in population]
-        # 更新全局最优解
         for ind, cost in zip(population, fitnesses):
             if cost < best_cost:
                 best_cost = cost
                 best_solution = ind
-
         selected = tournament_selection(population, fitnesses, tournament_size=2)
         offspring = []
         for i in range(0, len(selected) - 1, 2):
             p1, p2 = selected[i], selected[i + 1]
             if random.random() < crossover_rate:
-                child1, child2 = crossover(p1, p2)
+                c1, c2 = crossover(p1, p2)
             else:
-                child1, child2 = p1, p2
-            offspring.extend([child1, child2])
+                c1, c2 = p1, p2
+            offspring.extend([c1, c2])
         for i in range(len(offspring)):
             if random.random() < mutation_rate:
-                offspring[i] = mutate(offspring[i])
+                offspring[i] = mutate(offspring[i], env)
         elite_count = max(1, int(elite_rate * population_size))
         sorted_population = [ind for _, ind in sorted(zip(fitnesses, population), key=lambda x: x[0])]
-        new_population = sorted_population[:elite_count] + offspring[:population_size - elite_count]
-        population = new_population
-
-        print(f"GA Generation {gen + 1}: Best cost = {best_cost}")
-
+        population = sorted_population[:elite_count] + offspring[:population_size - elite_count]
     return best_solution, best_cost
 
 
-def algorithm_AFSA(env, population_size=100, iterations=100, try_number=10, random_move_prob=0.3):
+# （2.3.1）利用 AFSA 算法生成初始种群的辅助函数
+def generate_initial_population_afsa(env, population_size, max_trials=None):
     """
-    人工鱼群算法（AFSA）模块，用于在给定环境 env 上搜索路径。
+    利用 AFSA 算法多次生成可行路径作为初始种群
+    若连续 max_trials 次未能生成足够个体，则对剩余个体采用随机搜索补全。
+    """
+    if max_trials is None:
+        max_trials = population_size * 5
+    population = []
+    trials = 0
+    while len(population) < population_size and trials < max_trials:
+        # AFSA 算法内部已采用多个鱼进行搜索，此处调用得到一个解
+        path, cost = algorithm_AFSA(env)
+        if path is not None and cost < float('inf'):
+            population.append(path)
+        trials += 1
+    # 若不足则补充随机路径
+    while len(population) < population_size:
+        p = generate_random_path_from(env, env.start, env.goal)
+        if p is not None:
+            population.append(p)
+    return population
+
+
+# （2.4）人工鱼群算法（AFSA）模块 —— 新实现
+def grideAF_foodconsistence(X, goal):
+    """
+    计算“食物浓度”：当前位置到目标的欧氏距离；
+    参数 X 可为单个位置（元组）或多个位置（列表）
+    """
+    if isinstance(X, tuple):
+        return math.hypot(X[0] - goal[0], X[1] - goal[1])
+    else:
+        return [math.hypot(pos[0] - goal[0], pos[1] - goal[1]) for pos in X]
+
+
+def grid_af_prey(n, pos, ii, try_number, lastH, allowed, goal, MAXGEN, cur_iter):
+    """
+    觅食行为：在邻域内寻找使食物浓度降低的方向
+    """
+    present_H = lastH[ii]
+    rightInf = step_by_iter(cur_iter, MAXGEN, math.sqrt(2))
+    allow_area = [p for p in allowed if 0 < distance(pos, p) <= rightInf]
+    m = random.choices([0, 1], weights=[0.2, 0.8])[0]
+    nextPosition = None
+    if m == 0:
+        for _ in range(try_number):
+            if not allow_area:
+                break
+            candidate = random.choice(allow_area)
+            if present_H > grideAF_foodconsistence(candidate, goal):
+                nextPosition = candidate
+                break
+    else:
+        H_min = present_H
+        for p in allow_area:
+            candidate_H = grideAF_foodconsistence(p, goal)
+            if candidate_H < H_min:
+                H_min = candidate_H
+                nextPosition = p
+    if nextPosition is None:
+        nextPosition = random.choice(allow_area) if allow_area else pos
+    return nextPosition, grideAF_foodconsistence(nextPosition, goal)
+
+
+def variable_visual_by_iter(cur_iter, max_iter, vis_min=math.sqrt(2), vis_max=4):
+    """
+    根据当前迭代次数计算可变视野：
+      cur_iter：当前迭代次数（从0开始）
+      max_iter：最大迭代次数
+      vis_min：最小视野（√2）
+      vis_max：最大视野（3√2）
+
+    根据公式：
+      alpha = exp(-20 * (cur_iter / max_iter) ** 5)
+      Vis = alpha * vis_max + (1 - alpha) * vis_min
+    """
+    ratio = cur_iter / max_iter
+    alpha = math.exp(-20 * (ratio ** 5))
+    return alpha * vis_max + (1 - alpha) * vis_min
+
+
+def crowding_factor_by_distance(pos, goal, delta_old, n_f):
+    """
+    分段拥挤度计算函数（基于鱼离终点的距离）：
+
+    当鱼的位置 pos 与终点 goal 的欧氏距离 d 小于等于 2√2 时，
+    采用新公式计算拥挤度：
+        δ' = tanh(1/d) / n_f
+    （若 d 为 0 则直接返回 1/n_f 以避免除零）
+
+    当 d > 2√2 时，则直接返回预设拥挤度 delta_old。
 
     参数：
-      env: GridEnvironment 对象，包含 grid, start, goal, rows, cols
-      population_size: 鱼群中鱼的数量（初始种群大小），默认 30
-      iterations: 迭代次数，默认 100
-      try_number: 每条鱼在视觉范围内尝试查找更优解的次数，默认 5 次
-      random_move_prob: 当鱼未能在视觉范围内找到更优解时，进行随机移动的概率，默认 0.3
+      pos       : 当前鱼的坐标 (例如 (i, j))
+      goal      : 终点坐标
+      delta_old : 原始或默认的拥挤度
+      n_f       : 参数 n_f，用于调节新计算的拥挤度（例如可以设置为鱼的数量或其他常数）
 
     返回：
-      (最佳路径, 最佳路径代价)
-
-    依赖：
-      - generate_random_path(env): 随机生成一条从起点到终点的路径
-      - generate_random_path_from(env, start): 从给定起点随机生成一条路径到终点
-      - path_cost(path): 计算路径的总代价（连续点间欧氏距离之和）
+      新的拥挤度 δ'
     """
-    # 初始化鱼群，每条鱼是一条候选路径（利用随机路径生成函数）
-    population = []
-    while len(population) < population_size:
-        candidate = generate_random_path(env)
-        if candidate is not None:
-            population.append(candidate)
+    d = distance(pos, goal)
+    threshold = 2 * math.sqrt(2)
+    if d <= threshold:
+        if d == 0:
+            return 1.0 / n_f  # 或其他定义的极限值
+        return math.tanh(1.0 / d) / n_f
+    else:
+        return delta_old
 
-    best_solution = None
-    best_cost = float('inf')
 
-    # 主迭代过程
-    for it in range(iterations):
-        # 对鱼群中每条鱼更新（局部搜索或随机移动）
-        for i in range(population_size):
-            current_path = population[i]
-            current_cost = path_cost(current_path)
-            improved = False
+def step_by_iter(cur_iter, max_iter, step):
+    """
+    根据当前迭代次数计算可变视野：
+      cur_iter：当前迭代次数（从0开始）
+      max_iter：最大迭代次数
+      vis_min：最小视野（√2）
+      vis_max：最大视野（3√2）
 
-            # 在规定的尝试次数内搜索视觉邻域
+    根据公式：
+      alpha = exp(-20 * (cur_iter / max_iter) ** 5)
+      Vis = alpha * vis_max + (1 - alpha) * vis_min
+    """
+    ratio = cur_iter / max_iter
+    alpha = math.exp(-20 * (ratio ** 5))
+    return alpha * step + 0.3
+
+
+def each_af_dist(pos, positions):
+    """
+    计算 pos 与其他所有鱼之间的距离
+    """
+    return [distance(pos, other) for other in positions]
+
+
+def grid_af_follow(n, positions, ii, try_number, lastH, allowed, goal, MAXGEN, delta, cur_iter):
+    """
+    跟随行为：判断是否向邻近鱼群中局部最优靠拢，否则执行觅食行为
+    """
+    Xi = positions[ii]
+    D = each_af_dist(Xi, positions)
+    visual = variable_visual_by_iter(cur_iter, MAXGEN)
+    indices = [i for i, d in enumerate(D) if d > 0 and d < visual]
+    Nf = len(indices)
+    allow_area = [p for p in allowed if 0 < distance(Xi, p) <= math.sqrt(2)]
+    if Nf > 0:
+        Xvisual = [positions[i] for i in indices]
+        Hvisual = [lastH[i] for i in indices]
+        Xmin = Xvisual[Hvisual.index(min(Hvisual))]
+        Hi = lastH[ii]
+        delta = crowding_factor_by_distance(Xi, goal, delta, Nf)
+        if (min(Hvisual) / Nf) <= (Hi * (1 - delta)):
             for _ in range(try_number):
-                # 扰动策略：随机选择当前路径中一个非起点与非终点节点作为扰动点，
-                # 然后利用 generate_random_path_from 从该点重新生成一段路径
-                if len(current_path) <= 2:
-                    candidate_path = current_path
+                if not allow_area:
+                    break
+                candidate = random.choice(allow_area)
+                if distance(candidate, Xmin) < distance(Xi, Xmin):
+                    return candidate, grideAF_foodconsistence(candidate, goal)
+            return Xi, grideAF_foodconsistence(Xi, goal)
+        else:
+            return grid_af_prey(n, Xi, ii, try_number, lastH, allowed, goal, MAXGEN, cur_iter)
+    else:
+        return grid_af_prey(n, Xi, ii, try_number, lastH, allowed, goal, MAXGEN, cur_iter)
+
+
+def grid_af_swarm(n, positions, ii, try_number, lastH, allowed, goal, MAXGEN, delta, cur_iter):
+    """
+    群聚行为：计算邻近鱼群的质心，判断向质心靠拢是否有利，否则执行觅食行为
+    """
+    Xi = positions[ii]
+    D = each_af_dist(Xi, positions)
+    visual = variable_visual_by_iter(cur_iter, MAXGEN)
+    indices = [i for i, d in enumerate(D) if d > 0 and d < visual]
+    Nf = len(indices)
+    allow_area = [p for p in allowed if 0 < distance(Xi, p) <= math.sqrt(2)]
+    if Nf > 0:
+        avg_r = math.ceil(sum(positions[i][0] for i in indices) / Nf)
+        avg_c = math.ceil(sum(positions[i][1] for i in indices) / Nf)
+        Xc = (avg_r, avg_c)
+        Hc = grideAF_foodconsistence(Xc, goal)
+        Hi = lastH[ii]
+        delta = crowding_factor_by_distance(Xi, goal, delta, Nf)
+        if (Hc / Nf) <= (Hi * (1 - delta)):
+            for _ in range(try_number):
+                if not allow_area:
+                    break
+                candidate = random.choice(allow_area)
+                if distance(candidate, Xc) < distance(Xi, Xc):
+                    return candidate, grideAF_foodconsistence(candidate, goal)
+            return Xi, grideAF_foodconsistence(Xi, goal)
+        else:
+            return grid_af_prey(n, Xi, ii, try_number, lastH, allowed, goal, MAXGEN, cur_iter)
+    else:
+        return grid_af_prey(n, Xi, ii, try_number, lastH, allowed, goal, MAXGEN, cur_iter)
+
+
+def algorithm_AFSA(env, population_size=20, iterations=100, try_number=6, delta=0.8,
+                   random_move_prob=1):
+    """
+    新版AFSA算法实现：
+      1. 每条鱼先尝试跟随和群聚行为，选择其中表现更优者；
+      2. 若两者均未能改善当前位置，则采用觅食行为；
+      3. 若觅食行为仍未改善（位置未变），则以一定概率随机移动；
+      4. 仅在鱼到达目标时更新全局最佳路径 (global_best_cost)；
+
+    参数：
+      env: 包含 free_cells、start、goal、rows 等属性的环境对象
+      population_size: 鱼群数量
+      iterations: 最大迭代次数
+      try_number: 每条鱼尝试寻找更优位置的次数
+      delta: 拥挤因子
+      random_move_prob: 当觅食未改善位置时随机移动概率
+
+    返回：
+      当有鱼到达目标时，返回其路径及路径代价；否则返回 (None, inf)
+    """
+    allowed = sorted(env.free_cells)
+    N = population_size
+    MAXGEN = iterations
+
+    # 初始化：所有鱼都从起点出发，同时记录每条鱼的轨迹及“食物浓度”
+    positions = [env.start for _ in range(N)]
+    trajectories = [[env.start] for _ in range(N)]
+    H = [grideAF_foodconsistence(env.start, env.goal) for _ in range(N)]
+
+    # 公告牌：全局最佳完整路径（到达目标）的代价记录
+    global_best_cost = float('inf')
+    global_best_path = None
+
+    # 迭代更新
+    for j in range(MAXGEN):
+        new_positions = []
+        for i in range(N):
+            Xi = positions[i]
+            current_cost = grideAF_foodconsistence(Xi, env.goal)
+
+            # 1. 尝试跟随与群聚行为
+            pos_swarm, cost_swarm = grid_af_swarm(env.rows, positions, i, try_number, H, allowed, env.goal, MAXGEN,
+                                                  delta, j)
+            pos_follow, cost_follow = grid_af_follow(env.rows, positions, i, try_number, H, allowed, env.goal, MAXGEN,
+                                                     delta, j)
+
+            if cost_swarm < current_cost or cost_follow < current_cost:
+                # 若两者中有改善，则选择更优的候选位置
+                if cost_follow < cost_swarm:
+                    candidate, candidate_cost = pos_follow, cost_follow
                 else:
-                    idx = random.randint(1, len(current_path) - 2)
-                    new_segment = generate_random_path_from(env, current_path[idx])
-                    if new_segment is None:
-                        candidate_path = current_path
-                    else:
-                        candidate_path = current_path[:idx] + new_segment[1:]
-                candidate_cost = path_cost(candidate_path)
+                    candidate, candidate_cost = pos_swarm, cost_swarm
+            else:
+                # 2. 执行觅食行为
+                candidate, candidate_cost = grid_af_prey(env.rows, Xi, i, try_number, H, allowed, env.goal, MAXGEN, j)
+                # 3. 如果觅食未产生改变，则依据概率随机移动
+                if candidate == Xi:
+                    if random.random() < random_move_prob:
+                        allow_area = [p for p in allowed if 0 < distance(Xi, p) <= math.sqrt(2)]
+                        if allow_area:
+                            candidate = random.choice(allow_area)
+                            candidate_cost = grideAF_foodconsistence(candidate, env.goal)
 
-                # 如果发现候选解更优，则鱼前进到此解并退出当前尝试
-                if candidate_cost < current_cost:
-                    population[i] = candidate_path
-                    current_path = candidate_path
-                    current_cost = candidate_cost
-                    improved = True
-                    break  # 找到一个更优解后停止在视觉领域继续搜索
+            new_positions.append(candidate)
+            H[i] = candidate_cost
+            trajectories[i].append(candidate)
 
-            # 若经过视觉搜索后未找到更优解，则按一定概率进行随机移动（跳出局部最优）
-            if not improved and random.random() < random_move_prob:
-                candidate = generate_random_path(env)
-                if candidate is not None:
-                    population[i] = candidate
-                    current_path = candidate
-                    current_cost = path_cost(candidate)
+        positions = new_positions.copy()
 
-        # 每轮迭代后更新全局最优解
-        for candidate in population:
-            c = path_cost(candidate)
-            if c < best_cost:
-                best_cost = c
-                best_solution = candidate
+        # 检查哪些鱼已经到达目标，仅针对它们更新全局最佳路径
+        reached = [i for i, pos in enumerate(positions) if pos == env.goal]
+        if reached:
+            # 遍历到达目标的鱼，比较完整路径代价
+            for idx in reached:
+                fish_path_cost = path_cost(trajectories[idx])
+                if fish_path_cost < global_best_cost:
+                    global_best_cost = fish_path_cost
+                    global_best_path = trajectories[idx]
+            # 既然有鱼到达目标，可以提前结束
+            break
 
-        print(f"AFSA 迭代 {it + 1}: 最佳路径代价 = {best_cost}")
+    if global_best_path is None:
+        return None, float('inf')
+    else:
+        return global_best_path, global_best_cost
 
-    return best_solution, best_cost
+
+# （2.5）新算法：利用 AFSA 生成初始种群，再由 GA 搜索
+def algorithm_GFSA(env, population_size=100, generations=100,
+                   crossover_rate=0.82, mutation_rate=0.063, elite_rate=0.03):
+    """
+    新算法：使用 AFSA 生成初始种群，再利用 GA 进行优化
+    直接调用 algorithm_GA，并将 population_generator 参数设为 generate_initial_population_afsa
+    """
+    print("运行基于 AFSA 初始化的 GA 算法...")
+    path, cost = algorithm_GA(env, population_size, generations,
+                              crossover_rate, mutation_rate, elite_rate,
+                              population_generator=generate_initial_population_afsa)
+    return path, cost
 
 
 # -------------------------------
-# 4. 绘图辅助函数（对比展示）
+# 3. 绘图辅助函数
 # -------------------------------
 def plot_paths(env, results, title="路径规划算法对比"):
     """
-    绘制环境及各算法路径对比；
-    :param env: GridEnvironment 对象
-    :param results: 字典 {算法名称: 路径列表}
+    绘制环境及各算法路径对比
     """
     plt.figure(figsize=(10, 10))
     plt.imshow(env.grid, cmap='Greys', origin='upper')
@@ -544,8 +679,6 @@ def plot_paths(env, results, title="路径规划算法对比"):
     plt.xticks(np.arange(0.5, env.cols, 1), [])
     plt.yticks(np.arange(0.5, env.rows, 1), [])
     plt.title(title)
-
-    # 绘制起点和终点
     plt.plot(env.start[1], env.start[0], 'go', markersize=10, label="起点")
     plt.plot(env.goal[1], env.goal[0], 'mo', markersize=10, label="终点")
 
@@ -560,25 +693,24 @@ def plot_paths(env, results, title="路径规划算法对比"):
 
 
 # -------------------------------
-# 5. 主函数
+# 4. 主函数
 # -------------------------------
 def main():
-    # 生成环境
     grid, start, goal = generate_fixed_grid()
     env = GridEnvironment(grid, start, goal)
-
-    # 定义各算法接口，此处保证 GA 被正确调用
     algorithms = {
         "AStar": algorithm_AStar,
         "RRT": algorithm_RRT,
-        "GA": algorithm_GA,
-        "AFSA": algorithm_AFSA
+        "AFSA": algorithm_AFSA,
+        # 默认 GA 使用随机生成初始种群
+        "GA_Random": algorithm_GA,
+        # 新算法：利用 AFSA 初始化种群的 GA 版本
+        "GFSA": algorithm_GFSA,
     }
-
     results = {}
-    for name, algo_func in algorithms.items():
+    for name, algo in algorithms.items():
         print(f"\n运行算法：{name}")
-        path, cost = algo_func(env)
+        path, cost = algo(env)
         print(f"{name} 返回：代价 = {cost}, 路径 = {path}")
         results[name] = path
 
