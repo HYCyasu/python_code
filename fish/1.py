@@ -1,306 +1,118 @@
+import cv2
 import numpy as np
 import matplotlib.pyplot as plt
-import math, random, time
+from scipy.interpolate import interp1d
+import pandas as pd
+
+# 读入图像（请确保文件路径正确）
+img = cv2.imread('img.png')
+if img is None:
+    print("无法加载图像，请检查文件路径。")
+    exit()
+
+# 将图像转换到 HSV 色彩空间，有利于颜色分割
+hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+
+# 假设这四条曲线分别代表：电负荷、热负荷、风机、光伏
+# 这里给出一个示例 HSV 范围。你需要根据图中实际颜色做调整。
+color_ranges = {
+    '电负荷': {'lower': np.array([0, 70, 50]), 'upper': np.array([10, 255, 255])},  # 示例：红色部分
+    '热负荷': {'lower': np.array([100, 150, 0]), 'upper': np.array([140, 255, 255])},  # 示例：蓝色部分
+    '风机': {'lower': np.array([40, 70, 50]), 'upper': np.array([80, 255, 255])},  # 示例：绿色部分
+    '光伏': {'lower': np.array([10, 100, 100]), 'upper': np.array([25, 255, 255])}  # 示例：橙色部分
+}
+
+# ----- 第一步：手动校准图像坐标系 -----
+# 根据图像中坐标轴刻度确定以下变量（示例数值，仅供参考）：
+# 假设 x 轴像素 [x_min, x_max] 对应实际时间 [0, 24] 小时
+# 假设 y 轴像素 [y_max, y_min]（注意图像坐标原点在左上角）对应实际数值 [y_value_min, y_value_max]
+x_min, x_max = 100, 800  # 例如：x=100 像素对应 0 小时，x=800 像素对应 24 小时
+y_max, y_min = 550, 100  # 例如：y=550 像素对应数值下限（0），y=100 像素对应上限（100）
+time_start, time_end = 0, 24
+y_value_min, y_value_max = 0, 100  # 根据图像调整实际数值范围
 
 
-# ---------------- 环境类及移动方向 ----------------
-class GridEnvironment:
+def pixel_to_time(x_pixel):
+    """将 x 像素位置映射到实际时间（小时）"""
+    return (x_pixel - x_min) / (x_max - x_min) * (time_end - time_start) + time_start
+
+
+def pixel_to_value(y_pixel):
+    """将 y 像素位置映射到实际数据值
+       注意：图像中 y 越大表示越低，因此需要反转映射关系
     """
-    环境类，封装地图、起点和终点
-    """
-
-    def __init__(self, grid, start, goal):
-        self.grid = grid
-        self.start = start
-        self.goal = goal
-        self.rows, self.cols = grid.shape
+    return (y_max - y_pixel) / (y_max - y_min) * (y_value_max - y_value_min) + y_value_min
 
 
-# 定义允许的移动方向（八个方向）
-MOVE_DIRECTIONS = [(0, 1), (1, 0), (0, -1), (-1, 0),
-                   (1, 1), (1, -1), (-1, 1), (-1, -1)]
+# 用于存储每条曲线采样后的数据
+curve_data = {}
 
+# ----- 第二步：对每条曲线进行提取与采样 -----
+for label, ranges in color_ranges.items():
+    # 根据颜色范围生成掩码
+    mask = cv2.inRange(hsv, ranges['lower'], ranges['upper'])
+    # 对掩码进行形态学处理以减少噪声
+    kernel = np.ones((3, 3), np.uint8)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_DILATE, kernel)
 
-# ---------------- 固定地图的生成 ----------------
-def generate_fixed_grid():
-    """
-    生成固定地图（15×15）和障碍布局：
-      - grid：15×15 的 0-1 矩阵，0 表示通行区域，1 表示障碍
-      - start：起点 (0, 0)
-      - goal：终点 (14, 14)
-    """
-    rows, cols = 15, 15
-    grid = np.zeros((rows, cols), dtype=int)
-    obstacles = [
-        (0, 7), (1, 7), (1, 13), (2, 9), (2, 10), (2, 13), (3, 3), (3, 4),
-        (3, 7), (3, 8), (3, 13), (4, 8), (5, 1), (5, 7), (5, 10), (5, 12),
-        (6, 3), (7, 3), (7, 4), (7, 6), (7, 7), (7, 12), (7, 14), (8, 8),
-        (8, 11), (8, 12), (9, 2), (10, 2), (10, 4), (10, 13), (11, 8),
-        (11, 9), (11, 10), (12, 3), (12, 4), (12, 6), (12, 10), (13, 0),
-        (13, 4), (13, 6)
-    ]
-    for r, c in obstacles:
-        grid[r, c] = 1
-    start = (0, 0)
-    goal = (rows - 1, cols - 1)
-    return grid, start, goal
+    # 查找曲线轮廓
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not contours:
+        print(f"未找到 {label} 曲线")
+        continue
 
+    # 选择面积最大的轮廓作为目标
+    contour = max(contours, key=cv2.contourArea)
+    contour = contour.squeeze()  # 去除多余的维度
 
-# ---------------- 工具函数 ----------------
-def distance(p1, p2):
-    """
-    计算两个二维坐标 p1、p2 之间的欧氏距离
-    """
-    return math.sqrt((p1[0] - p2[0]) ** 2 + (p1[1] - p2[1]) ** 2)
+    # 按 x 坐标排序，确保从左到右的顺序
+    sorted_idx = np.argsort(contour[:, 0])
+    contour_sorted = contour[sorted_idx]
 
+    # 提取 x 与 y 像素坐标
+    x_pixels = contour_sorted[:, 0]
+    y_pixels = contour_sorted[:, 1]
 
-def grideAF_foodconsistence(X, goal):
-    """
-    计算“食物浓度”，用当前位置到目标位置的欧氏距离表示。
-    参数 X 可为单个位置（元组）或多个位置（列表）
-    """
-    if isinstance(X, tuple):
-        return distance(X, goal)
-    else:
-        return [distance(pos, goal) for pos in X]
+    # 将像素坐标转换为实际的时间和数值
+    times = np.array([pixel_to_time(x) for x in x_pixels])
+    values = np.array([pixel_to_value(y) for y in y_pixels])
 
+    # 对数据进行插值，使得在整个时间区间上连续，并以一个小时为步长采样
+    try:
+        f_interp = interp1d(times, values, kind='linear', bounds_error=False, fill_value="extrapolate")
+    except Exception as e:
+        print(f"{label} 插值出错：", e)
+        continue
+    times_hourly = np.arange(time_start, time_end + 1, 1)  # 每小时一步
+    values_hourly = f_interp(times_hourly)
 
-def allowed_positions(n, Barrier):
-    """
-    返回在 0~n-1 范围内，除去障碍物位置（Barrier）以外的所有位置，位置以 (row, col) 表示
-    """
-    all_positions = [(i, j) for i in range(n) for j in range(n)]
-    return sorted([pos for pos in all_positions if pos not in Barrier])
+    curve_data[label] = (times_hourly, values_hourly)
 
-
-# ---------------- 鱼群算法中的行为函数 ----------------
-def grid_af_prey(n, pos, ii, try_number, lastH, Barrier, goal, MAXGEN):
-    """
-    觅食行为：当前鱼尝试在邻域内寻找能使食物浓度降低的移动方向，
-    返回 (nextPosition, nextPositionH)
-    """
-    present_H = lastH[ii]
-    rightInf = math.sqrt(2)
-    rightInf = math.ceil(rightInf * (1 - 1 / MAXGEN))
-    allow = allowed_positions(n, Barrier)
-    allow_area = []
-    for p in allow:
-        d = distance(pos, p)
-        if d > 0 and d <= rightInf:
-            allow_area.append(p)
-    m = random.choices([0, 1], weights=[0.2, 0.8])[0]
-    nextPosition = None
-    if m == 0:
-        for _ in range(try_number):
-            if not allow_area:
-                break
-            Xj = random.choice(allow_area)
-            Hj = grideAF_foodconsistence(Xj, goal)
-            if present_H > Hj:
-                nextPosition = Xj
-                break
-    else:
-        H_min = present_H
-        for p in allow_area:
-            Hi = grideAF_foodconsistence(p, goal)
-            if Hi < H_min:
-                H_min = Hi
-                nextPosition = p
-    if nextPosition is None:
-        if allow_area:
-            nextPosition = random.choice(allow_area)
-        else:
-            nextPosition = pos
-    nextPositionH = grideAF_foodconsistence(nextPosition, goal)
-    return nextPosition, nextPositionH
-
-
-def each_af_dist(pos, positions):
-    """
-    计算当前鱼（pos）与所有鱼（positions）之间的距离列表
-    """
-    return [distance(pos, other) for other in positions]
-
-
-def grid_af_follow(n, positions, ii, try_number, lastH, Barrier, goal, MAXGEN, delta):
-    """
-    跟随行为：根据邻近鱼的状态判断是否向局部最优位置靠拢，否则执行觅食行为
-    """
-    Xi = positions[ii]
-    D = each_af_dist(Xi, positions)
-    visual = np.mean(D)
-    indices = [i for i, d in enumerate(D) if d > 0 and d < visual]
-    Nf = len(indices)
-    allow = allowed_positions(n, Barrier)
-    allow_area = [p for p in allow if distance(Xi, p) > 0 and distance(Xi, p) <= math.sqrt(2)]
-    if Nf > 0:
-        Xvisual = [positions[i] for i in indices]
-        Hvisual = [lastH[i] for i in indices]
-        min_index = Hvisual.index(min(Hvisual))
-        Xmin = Xvisual[min_index]
-        Hi = lastH[ii]
-        if (min(Hvisual) / Nf) <= (Hi * delta):
-            for _ in range(try_number):
-                if not allow_area:
-                    break
-                Xnext = random.choice(allow_area)
-                if distance(Xnext, Xmin) < distance(Xi, Xmin):
-                    nextPosition = Xnext
-                    nextPositionH = grideAF_foodconsistence(nextPosition, goal)
-                    return nextPosition, nextPositionH
-            nextPosition = Xi
-            nextPositionH = grideAF_foodconsistence(nextPosition, goal)
-            return nextPosition, nextPositionH
-        else:
-            return grid_af_prey(n, Xi, ii, try_number, lastH, Barrier, goal, MAXGEN)
-    else:
-        return grid_af_prey(n, Xi, ii, try_number, lastH, Barrier, goal, MAXGEN)
-
-
-def grid_af_swarm(n, positions, ii, try_number, lastH, Barrier, goal, MAXGEN, delta):
-    """
-    群聚行为：计算邻近鱼的位置质心，并判断移动是否能改善食物浓度，
-    否则执行觅食行为
-    """
-    Xi = positions[ii]
-    D = each_af_dist(Xi, positions)
-    visual = np.mean(D)
-    indices = [i for i, d in enumerate(D) if d > 0 and d < visual]
-    Nf = len(indices)
-    allow = allowed_positions(n, Barrier)
-    allow_area = [p for p in allow if distance(Xi, p) > 0 and distance(Xi, p) <= math.sqrt(2)]
-    if Nf > 0:
-        sum_r = sum(positions[i][0] for i in indices)
-        sum_c = sum(positions[i][1] for i in indices)
-        avg_r = math.ceil(sum_r / Nf)
-        avg_c = math.ceil(sum_c / Nf)
-        Xc = (avg_r, avg_c)
-        Hc = grideAF_foodconsistence(Xc, goal)
-        Hi = lastH[ii]
-        if (Hc / Nf) <= (Hi * delta):
-            for _ in range(try_number):
-                if not allow_area:
-                    break
-                Xnext = random.choice(allow_area)
-                if distance(Xnext, Xc) < distance(Xi, Xc):
-                    nextPosition = Xnext
-                    nextPositionH = grideAF_foodconsistence(nextPosition, goal)
-                    return nextPosition, nextPositionH
-            nextPosition = Xi
-            nextPositionH = grideAF_foodconsistence(nextPosition, goal)
-            return nextPosition, nextPositionH
-        else:
-            return grid_af_prey(n, Xi, ii, try_number, lastH, Barrier, goal, MAXGEN)
-    else:
-        return grid_af_prey(n, Xi, ii, try_number, lastH, Barrier, goal, MAXGEN)
-
-
-def draw_path(path):
-    """
-    根据给定的二维坐标路径绘图
-    """
-    xs = [pos[1] + 0.5 for pos in path]
-    ys = [pos[0] + 0.5 for pos in path]
-    plt.figure()
-    plt.plot(xs, ys, 'r-', linewidth=2)
-    plt.title("Path found by AFSA")
-    plt.gca().set_aspect('equal', adjustable='box')
+    # 绘制检测结果供参考验证
+    plt.figure(figsize=(8, 5))
+    plt.imshow(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
+    plt.plot(x_pixels, y_pixels, 'k-', lw=2, label='提取轮廓')
+    # 由实际采样值反向映射到像素坐标便于验证
+    x_pixels_sampled = ((times_hourly - time_start) / (time_end - time_start)) * (x_max - x_min) + x_min
+    y_pixels_sampled = y_max - (values_hourly - y_value_min) * (y_max - y_min) / (y_value_max - y_value_min)
+    plt.plot(x_pixels_sampled, y_pixels_sampled, 'ro', label='采样点')
+    plt.title(f"{label} 曲线数据提取")
+    plt.legend()
     plt.show()
 
+# ----- 第三步：输出与保存数据 -----
+for label, (times_hourly, values_hourly) in curve_data.items():
+    print(f"--- {label} ---")
+    for t, v in zip(times_hourly, values_hourly):
+        print(f"时间: {t:.1f} 小时, 数值: {v:.2f}")
 
-# ---------------- 主函数 ----------------
-def main():
-    # 生成固定地图，并由 GridEnvironment 封装
-    grid, start, goal = generate_fixed_grid()
-    env = GridEnvironment(grid, start, goal)
-
-    # 生成障碍集合 Barrier（障碍以 (row, col) 表示）
-    Barrier = [(r, c) for r in range(env.rows) for c in range(env.cols) if env.grid[r, c] == 1]
-
-    # 显示地图（使用 np.pad 对地图边界进行补白）
-    padded_grid = np.pad(env.grid, ((0, 1), (0, 1)), mode='constant', constant_values=0)
-    plt.figure()
-    plt.pcolor(padded_grid, cmap='gray', edgecolors='k', linewidths=0.5)
-    plt.title("Fixed 15×15 Grid Map")
-    plt.xticks(np.arange(0.5, env.rows + 0.5, 10))
-    plt.yticks(np.arange(0.5, env.rows + 0.5, 10))
-    plt.gca().invert_yaxis()
-    plt.show()
-
-    # 参数设置
-    N = 50  # 人工鱼数量
-    try_number = 8  # 尝试步数
-    MAXGEN = 50  # 最大迭代次数
-    delta = 0.618  # 拥挤因子
-    shiftFreq = 4  # 行为切换频率
-
-    # 初始所有鱼的位置均为起点（使用二维坐标表示）
-    ppValue = [env.start for _ in range(N)]
-    trajectories = [[env.start] for _ in range(N)]
-    H = grideAF_foodconsistence(ppValue, env.goal)  # 列表形式的食物浓度
-
-    count = 1
-    positions_history = []
-    positions_history.append(ppValue.copy())
-
-    start_time = time.time()
-
-    # 主迭代循环
-    for j in range(MAXGEN):
-        new_positions = []
-        if count % shiftFreq == 0:
-            shift = 2
-        else:
-            shift = 1
-
-        if shift == 1:
-            # 触发觅食行为
-            for i in range(N):
-                pos, posH = grid_af_prey(env.rows, ppValue[i], i, try_number, H, Barrier, env.goal, MAXGEN)
-                new_positions.append(pos)
-                H[i] = posH
-                trajectories[i].append(pos)
-        else:
-            # 同时执行群聚与跟随行为，选择较优的那个
-            for i in range(N):
-                pos_swarm, posH_swarm = grid_af_swarm(env.rows, ppValue, i, try_number, H, Barrier, env.goal, MAXGEN,
-                                                      delta)
-                pos_follow, posH_follow = grid_af_follow(env.rows, ppValue, i, try_number, H, Barrier, env.goal, MAXGEN,
-                                                         delta)
-                if posH_follow < posH_swarm:
-                    pos, posH = pos_follow, posH_follow
-                else:
-                    pos, posH = pos_swarm, posH_swarm
-                new_positions.append(pos)
-                H[i] = posH
-                trajectories[i].append(pos)
-        count += 1
-        ppValue = new_positions.copy()
-        positions_history.append(ppValue.copy())
-        reached = [i for i, pos in enumerate(ppValue) if pos == env.goal]
-        if reached:
-            print("有鱼在第", j + 1, "次迭代中到达终点。")
-            break
-    else:
-        print("没有鱼达到目标点！")
-        return
-
-    # 在到达终点的鱼中，选择路径最短的鱼
-    path_lengths = []
-    for i in reached:
-        traj = trajectories[i]
-        length_sum = 0
-        for k in range(len(traj) - 1):
-            length_sum += distance(traj[k], traj[k + 1])
-        path_lengths.append(length_sum)
-    best_index = reached[path_lengths.index(min(path_lengths))]
-    best_path = trajectories[best_index]
-    print("最短路径长度为: {:.2f}".format(min(path_lengths)))
-    draw_path(best_path)
-
-    elapsed = time.time() - start_time
-    print("算法运行时间: {:.2f} 秒".format(elapsed))
-
-
-if __name__ == '__main__':
-    main()
+# 整合各曲线数据后保存到 CSV 文件中
+dfs = []
+for label, (times_hourly, values_hourly) in curve_data.items():
+    df = pd.DataFrame({'时间(小时)': times_hourly, label: values_hourly})
+    df.set_index('时间(小时)', inplace=True)
+    dfs.append(df)
+df_all = pd.concat(dfs, axis=1)
+df_all.to_csv("extracted_curve_data.csv")
+print("所有曲线数据已保存至 extracted_curve_data.csv")
