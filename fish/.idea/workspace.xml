@@ -53,6 +53,7 @@
     "Python.AFSA.executor": "Run",
     "Python.A_RRT.executor": "Run",
     "Python.main.executor": "Run",
+    "Python.random.executor": "Run",
     "RunOnceActivity.ShowReadmeOnStart": "true",
     "git-widget-placeholder": "main",
     "ignore.virus.scanning.warn.message": "true",
