@@ -864,16 +864,16 @@ def plot_paths(env, results, title="路径规划算法对比"):
     plt.plot(env.start[1], env.start[0], marker='o', color='g', markersize=12, label="起点")  # 绿色圆形
     plt.plot(env.goal[1], env.goal[0], marker='D', color='m', markersize=12, label="终点")  # 洋红菱形
 
-    colors     = ['r', 'b', 'y', 'c', 'm', 'k', 'orange', 'purple']
+    colors = ['r', 'b', 'y', 'c', 'm', 'k', 'orange', 'purple']
     line_styles = ['-', '--', '-.', ':', (0, (5, 1)), (0, (3, 1, 1, 1))]
-    markers     = ['o', 's', '^', 'D', 'P', '*', 'X', 'v']
+    markers = ['o', 's', '^', 'D', 'P', '*', 'X', 'v']
 
     for idx, (name, path) in enumerate(results.items()):
         if not path:
             continue
-        color  = colors[idx % len(colors)]
-        ls     = line_styles[idx % len(line_styles)]
-        mkr    = markers[idx % len(markers)]
+        color = colors[idx % len(colors)]
+        ls = line_styles[idx % len(line_styles)]
+        mkr = markers[idx % len(markers)]
         xs = [p[1] for p in path]
         ys = [p[0] for p in path]
         plt.plot(xs, ys,
@@ -931,9 +931,6 @@ def plot_convergence(convergence_histories, title="算法收敛曲线比较", ma
     plt.show()
 
 
-from scipy.signal import savgol_filter
-
-
 # -------------------------------
 # 4. 主函数
 # -------------------------------
@@ -960,6 +957,7 @@ def main():
         "GFSA": history_GFSA,
         "GFSA1": history_GFSA1,
         "GFSA2": history_GFSA2,
+
         "GFSA3": history_GFSA3,
     }
     results = {}
